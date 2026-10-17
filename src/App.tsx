@@ -5,13 +5,15 @@ import { automaticAngle, daylight, shadeCoverage, solarOutput, sunGeometry, type
 
 const fmtTime = (t: number) => `${String(Math.floor(t / 60) % 24).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
 const fmtHour = (t: number) => t / 60;
+type FanSpeed = 'Low' | 'Medium' | 'High';
+const FAN_POWER_KW: Record<FanSpeed, number> = { Low: 0.32, Medium: 0.56, High: 0.84 };
 const IconButton = ({ children, onClick, active = false, label }: { children: React.ReactNode; onClick: () => void; active?: boolean; label: string }) => <button aria-label={label} title={label} onClick={onClick} className={`icon-button ${active ? 'selected' : ''}`}>{children}</button>;
 
 export default function App() {
   const [minute, setMinute] = useState(9 * 60 + 24), [playing, setPlaying] = useState(false), [speed, setSpeed] = useState<Speed>(1);
   const [sunlight, setSunlight] = useState(78), [temperature, setTemperature] = useState(29), [battery, setBattery] = useState(76);
   const [batteryStart, setBatteryStart] = useState(76), [angleMode, setAngleMode] = useState<'Auto'|'Manual'>('Auto'), [manualAngle, setManualAngle] = useState(0), [autoCooling, setAutoCooling] = useState(false);
-  const [fanMode, setFanMode] = useState<'Auto'|'Manual'>('Auto'), [manualFan, setManualFan] = useState(false), [threshold, setThreshold] = useState(30), [fanSpeed, setFanSpeed] = useState('Medium'), [preview, setPreview] = useState(false);
+  const [fanMode, setFanMode] = useState<'Auto'|'Manual'>('Auto'), [manualFan, setManualFan] = useState(false), [threshold, setThreshold] = useState(30), [fanSpeed, setFanSpeed] = useState<FanSpeed>('Medium'), [preview, setPreview] = useState(false);
   const [history, setHistory] = useState<HistoryPoint[]>([]), [events, setEvents] = useState(['Adaptive shading aligned with the morning sun', 'System online · all sensors connected']);
   const lastMinute = useRef(minute), prevNight = useRef(false), prevFan = useRef(false);
   const hour = fmtHour(minute), night = daylight(hour) < 0.03, activeNight = night || preview;
@@ -19,7 +21,7 @@ export default function App() {
   useEffect(() => { if (temperature >= threshold) setAutoCooling(true); else if (temperature <= threshold - 1.5) setAutoCooling(false); }, [temperature, threshold]);
   const fansOn = fanMode === 'Auto' ? autoCooling && battery > 7 : manualFan && battery > 2;
   const effectiveSpeed = battery < 12 && fanSpeed === 'High' ? 'Low' : fanSpeed;
-  const fanKw = fansOn ? ({ Low: .32, Medium: .56, High: .84 }[effectiveSpeed]) : 0;
+  const fanKw = fansOn ? FAN_POWER_KW[effectiveSpeed] : 0;
   const solar = solarOutput(hour, sunlight, angle), lighting = activeNight && battery > 5 ? .24 : 0, demand = .18 + fanKw + lighting;
   const energyState = solar > demand + .1 ? 'Charging' : solar + .1 < demand ? 'Discharging' : 'Balanced';
   const runtime = demand > 0 && battery / 100 * 48 > 2.4 ? Math.floor(((battery / 100 * 48 - 2.4) * 60) / demand) : 0;
@@ -96,7 +98,7 @@ export default function App() {
         <div className="switch-row"><div><b>Automatic mode</b><div className="helper">Activates above target temperature</div></div><button className={`toggle ${fanMode==='Auto'?'on':''}`} onClick={()=>setFanMode(fanMode==='Auto'?'Manual':'Auto')} aria-label="Toggle automatic fan mode"><i/></button></div>
         {fanMode==='Manual'&&<div className="fan-switch-row"><span>Fan request</span><button className={`small-toggle ${manualFan?'on':''}`} onClick={()=>setManualFan(!manualFan)}>{manualFan?'ON':'OFF'}</button></div>}
         <div className="threshold-row"><span>Activation temperature</span><b>{threshold}°C</b></div><input className="temp-slider" type="range" min="24" max="38" value={threshold} onChange={e=>setThreshold(+e.target.value)}/><div className="threshold-note">Hysteresis: 1.5°C · helps prevent rapid cycling</div>
-        <div className="speed-title">FAN SPEED</div><div className="speed-options">{['Low','Medium','High'].map(s=><button onClick={()=>setFanSpeed(s)} className={fanSpeed===s?'chosen':''} key={s}>{s}</button>)}</div>{battery<12&&<div className="warning">Low battery · cooling capped at low speed</div>}
+        <div className="speed-title">FAN SPEED</div><div className="speed-options">{(['Low','Medium','High'] as FanSpeed[]).map(s=><button onClick={()=>setFanSpeed(s)} className={fanSpeed===s?'chosen':''} key={s}>{s}</button>)}</div>{battery<12&&<div className="warning">Low battery · cooling capped at low speed</div>}
         <div className="fan-power"><span>Current fan consumption</span><b>{fanKw.toFixed(2)} kW</b></div>
       </div>
     </section>
