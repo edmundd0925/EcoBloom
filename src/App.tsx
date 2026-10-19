@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, BatteryCharging, ChevronDown, CircleHelp, Clock3, Fan, Leaf, Lightbulb, Pause, Play, RotateCcw, Settings2, Sun, Zap } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { automaticAngle, daylight, shadeCoverage, solarOutput, sunGeometry, type HistoryPoint, type Speed } from './simulation';
+import { automaticAngle, dayOfYear, daylight, shadeCoverage, solarOutput, sunGeometry, sunPosition3d, type HistoryPoint, type Speed } from './simulation';
+import { CanopyScene } from './park/CanopyScene';
 
 const fmtTime = (t: number) => `${String(Math.floor(t / 60) % 24).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
 const fmtHour = (t: number) => t / 60;
 type FanSpeed = 'Low' | 'Medium' | 'High';
 const FAN_POWER_KW: Record<FanSpeed, number> = { Low: 0.32, Medium: 0.56, High: 0.84 };
+const initialLocalDate = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
 const IconButton = ({ children, onClick, active = false, label }: { children: React.ReactNode; onClick: () => void; active?: boolean; label: string }) => <button aria-label={label} title={label} onClick={onClick} className={`icon-button ${active ? 'selected' : ''}`}>{children}</button>;
 
 export default function App() {
@@ -14,15 +16,20 @@ export default function App() {
   const [sunlight, setSunlight] = useState(78), [temperature, setTemperature] = useState(29), [battery, setBattery] = useState(76);
   const [batteryStart, setBatteryStart] = useState(76), [angleMode, setAngleMode] = useState<'Auto'|'Manual'>('Auto'), [manualAngle, setManualAngle] = useState(0), [autoCooling, setAutoCooling] = useState(false);
   const [fanMode, setFanMode] = useState<'Auto'|'Manual'>('Auto'), [manualFan, setManualFan] = useState(false), [threshold, setThreshold] = useState(30), [fanSpeed, setFanSpeed] = useState<FanSpeed>('Medium'), [preview, setPreview] = useState(false);
+  const [headingMode, setHeadingMode] = useState<'Auto'|'Manual'>('Auto'), [manualHeading, setManualHeading] = useState(0), [occupancy, setOccupancy] = useState(5);
+  const [simDate, setSimDate] = useState(initialLocalDate), [latitude, setLatitude] = useState(3.139), [longitude, setLongitude] = useState(101.686);
   const [history, setHistory] = useState<HistoryPoint[]>([]), [events, setEvents] = useState(['Adaptive shading aligned with the morning sun', 'System online · all sensors connected']);
   const lastMinute = useRef(minute), prevNight = useRef(false), prevFan = useRef(false);
-  const hour = fmtHour(minute), night = daylight(hour) < 0.03, activeNight = night || preview;
-  const sun = sunGeometry(hour), angle = angleMode === 'Auto' ? automaticAngle(hour, temperature) : manualAngle, shade = shadeCoverage(hour, angle);
+  const hour = fmtHour(minute), simulationDay = dayOfYear(simDate), night = daylight(hour, latitude, simulationDay, longitude) < 0.03, activeNight = night || preview;
+  const sun = sunGeometry(hour), angle = angleMode === 'Auto' ? automaticAngle(hour, temperature) : manualAngle;
+  const { azimuth: sunAzimuth, elevation: sunElevation } = sunPosition3d(hour, latitude, simulationDay, longitude);
+  const heading = headingMode === 'Auto' ? Math.max(-55, Math.min(55, 180 - sunAzimuth)) : manualHeading;
+  const shade = shadeCoverage(hour, angle, heading, latitude, simulationDay, longitude);
   useEffect(() => { if (temperature >= threshold) setAutoCooling(true); else if (temperature <= threshold - 1.5) setAutoCooling(false); }, [temperature, threshold]);
   const fansOn = fanMode === 'Auto' ? autoCooling && battery > 7 : manualFan && battery > 2;
   const effectiveSpeed = battery < 12 && fanSpeed === 'High' ? 'Low' : fanSpeed;
   const fanKw = fansOn ? FAN_POWER_KW[effectiveSpeed] : 0;
-  const solar = solarOutput(hour, sunlight, angle), lighting = activeNight && battery > 5 ? .24 : 0, demand = .18 + fanKw + lighting;
+  const solar = solarOutput(hour, sunlight, angle, heading, latitude, simulationDay, longitude), lighting = activeNight && battery > 5 ? .24 : 0, demand = .18 + fanKw + lighting;
   const energyState = solar > demand + .1 ? 'Charging' : solar + .1 < demand ? 'Discharging' : 'Balanced';
   const runtime = demand > 0 && battery / 100 * 48 > 2.4 ? Math.floor(((battery / 100 * 48 - 2.4) * 60) / demand) : 0;
   const pushEvent = (msg: string) => setEvents(e => [msg, ...e].slice(0, 20));
@@ -37,13 +44,13 @@ export default function App() {
   }, [minute, solar, demand]);
   useEffect(() => { if (night !== prevNight.current) { pushEvent(night ? 'Night bloom activated · decorative lights on' : 'Day mode restored · panels tracking sunlight'); prevNight.current = night; } }, [night]);
   useEffect(() => { if (fansOn !== prevFan.current) { pushEvent(fansOn ? `Cooling fans activated · ${effectiveSpeed.toLowerCase()} speed` : 'Cooling fans stopped · below activation threshold'); prevFan.current = fansOn; } }, [fansOn, effectiveSpeed]);
-  const reset = () => { setMinute(9*60+24); setPlaying(false); setSpeed(1); setSunlight(78); setTemperature(29); setBattery(batteryStart); setAngleMode('Auto'); setManualAngle(0); setFanMode('Auto'); setManualFan(false); setAutoCooling(false); setThreshold(30); setFanSpeed('Medium'); setPreview(false); setHistory([]); pushEvent('Scenario reset to morning defaults'); };
+  const reset = () => { setMinute(9*60+24); setPlaying(false); setSpeed(1); setSunlight(78); setTemperature(29); setBattery(batteryStart); setAngleMode('Auto'); setManualAngle(0); setHeadingMode('Auto'); setManualHeading(0); setOccupancy(5); setFanMode('Auto'); setManualFan(false); setAutoCooling(false); setThreshold(30); setFanSpeed('Medium'); setPreview(false); setHistory([]); pushEvent('Scenario reset to morning defaults'); };
   const chartData = useMemo(() => history.length ? history : [{ time: fmtTime(minute), solar: +solar.toFixed(1), demand: +demand.toFixed(1), battery: battery, temp: temperature, angle, fan: fansOn ? 1 : 0 }], [history, minute, solar, demand, battery, temperature, angle, fansOn]);
   const setClock = (value: number) => { lastMinute.current = value; setMinute(value); };
 
   return <main className="app-shell">
     <header className="topbar"><div className="brand"><div className="brand-mark"><Leaf size={19}/></div><div><div className="brand-name">ecobloom<span>®</span></div><div className="brand-sub">SMART SOLAR PARK SIMULATOR</div></div></div><div className="header-right"><div className="status-pill"><i className={night?'moon-dot':'sun-dot'} />{night?'Night mode':'Day mode'}</div><div className="header-time"><Clock3 size={15}/>{fmtTime(minute)}</div><div className="playback"><IconButton label={playing?'Pause':'Play'} active={playing} onClick={()=>setPlaying(!playing)}>{playing?<Pause size={15}/>:<Play size={15}/>}</IconButton><IconButton label="Reset" onClick={reset}><RotateCcw size={15}/></IconButton></div></div></header>
-    <section className="welcome"><div><div className="eyebrow">A LIVING ENERGY LANDSCAPE</div><h1>Good morning, park operator <span>✳</span></h1><p>Every ray of sun, a little more room to breathe.</p></div><div className="live-tag"><span className="pulse"/> LIVE SIMULATION <span className="tag-divider"/>{playing?`${speed}× SPEED`:'PAUSED'}</div></section>
+    <section className="welcome"><div><div className="eyebrow">A LIVING ENERGY LANDSCAPE</div><h1>Good morning, park operator</h1><p>Every ray of sun, a little more room to breathe.</p></div><div className="live-tag"><span className="pulse"/> LIVE SIMULATION <span className="tag-divider"/>{playing?`${speed}× SPEED`:'PAUSED'}</div></section>
     <section className="main-grid">
       <div className="scene-card"><div className="scene-head"><div><div className="section-kicker">PARK OVERVIEW</div><h2>Canopy 01 <span className="online"><i/> ONLINE</span></h2></div><button className="scene-menu"><CircleHelp size={16}/></button></div>
         <svg className={`park-svg ${night?'night':''}`} viewBox="0 0 900 510" role="img" aria-label="Animated 2D solar park with EcoBloom canopy">
@@ -69,8 +76,8 @@ export default function App() {
           <g transform="translate(143 391)"><path d="M0 0V-20M30 0V-20M-4 -20H34M0 -29V-23M15 -29V-23M30 -29V-23" stroke="#8b6748" strokeWidth="4"/><path d="M-2 -20H32" stroke="#bf9b6c" strokeWidth="7"/></g>
           <g><rect x="30" y="26" width="138" height="34" rx="17" fill="#ffffff" opacity=".8"/><circle cx="49" cy="43" r="4" fill="#e8b647"/><text x="61" y="47" fontSize="11" fontWeight="700" fill="#48645c">{solar.toFixed(1)} kW SOLAR</text></g>
           {fansOn&&<g><rect x="704" y="26" width="146" height="34" rx="17" fill="#ffffff" opacity=".82"/><circle cx="723" cy="43" r="4" fill="#59a887"/><text x="735" y="47" fontSize="11" fontWeight="700" fill="#48645c">COOLING ACTIVE</text></g>}
-          {activeNight&&<g><rect x="365" y="28" width="170" height="30" rx="15" fill="#243e45" opacity=".8"/><text x="450" y="47" textAnchor="middle" fontSize="10" fontWeight="700" letterSpacing="1.2" fill="#ffd88e">✦ NIGHT BLOOM</text></g>}
-        </svg>
+          {activeNight&&<g><rect x="365" y="28" width="170" height="30" rx="15" fill="#243e45" opacity=".8"/><text x="450" y="47" textAnchor="middle" fontSize="10" fontWeight="700" letterSpacing="1.2" fill="#ffd88e">NIGHT BLOOM</text></g>}
+        </svg><CanopyScene heading={heading} tilt={angle} sunAzimuth={sunAzimuth} sunElevation={sunElevation} fansOn={fansOn} night={night || preview} occupancy={occupancy}/>
         <div className="scene-foot"><span><span className="legend-dot sun-dot"/>SUN POSITION <b>{fmtTime(minute)}</b></span><span><span className="legend-dot shade-dot"/>SHADE COVERAGE <b>{shade}%</b></span><span className="scene-foot-right">SIMULATED · ILLUSTRATIVE MODEL</span></div>
       </div>
       <aside className="side-stack">
@@ -86,6 +93,7 @@ export default function App() {
         <div className="control-block"><div className="control-title"><span>Sunlight intensity</span><b>{sunlight}<small>%</small></b></div><input type="range" min="0" max="100" value={sunlight} onChange={e=>setSunlight(+e.target.value)}/><div className="helper">Cloud cover and atmospheric conditions</div></div>
         <div className="control-block"><div className="control-title"><span>Ambient temperature</span><b>{temperature}<small>°C</small></b></div><input className="temp-slider" type="range" min="20" max="42" value={temperature} onChange={e=>setTemperature(+e.target.value)}/><div className="helper">Fan threshold currently {threshold}°C</div></div>
         <div className="control-block"><div className="control-title"><span>Scenario battery charge</span><b>{batteryStart}<small>%</small></b></div><input type="range" min="0" max="100" value={batteryStart} onChange={e=>{const v=+e.target.value;setBatteryStart(v);setBattery(v)}}/><div className="helper">Sets charge now and the reset starting level.</div></div>
+        <div className="control-block location-control"><div className="control-title"><span>Park location</span><b>Kuala Lumpur</b></div><div className="location-inputs"><label>Date<input type="date" value={simDate} onChange={e=>setSimDate(e.target.value)}/></label><label>Latitude<input type="number" min="-89" max="89" step=".001" value={latitude} onChange={e=>setLatitude(+e.target.value)}/></label><label>Longitude<input type="number" min="-180" max="180" step=".001" value={longitude} onChange={e=>setLongitude(+e.target.value)}/></label></div><div className="helper">Date and coordinates set the illustrated sun path.</div></div>
         <div className="control-block last"><div className="control-title"><span>Simulation speed</span><div className="segmented">{([1,2,4] as Speed[]).map(n=><button className={n===speed?'active':''} key={n} onClick={()=>setSpeed(n)}>{n}×</button>)}</div></div></div>
       </div>
       <div className="panel canopy-controls"><div className="panel-header"><div className="panel-icon canopy-icon">⌁</div><div><h3>Canopy controls</h3><p>Adaptive shade &amp; night bloom</p></div><span className="auto-tag">{angleMode.toUpperCase()}</span></div>
@@ -93,6 +101,7 @@ export default function App() {
         <div className="angle-control"><div className="control-title"><span>Canopy angle</span><b>{angle>0?'+':''}{angle.toFixed(1)}°</b></div><input type="range" min="-15" max="15" value={angleMode==='Auto'?angle:manualAngle} disabled={angleMode==='Auto'} onChange={e=>setManualAngle(+e.target.value)}/><div className="range-captions"><span>−15°</span><span>0°</span><span>+15°</span></div></div>
         <div className="shade-line"><span>Seating area shaded</span><b>{shade}%</b></div><div className="shade-progress"><i style={{width:`${shade}%`}}/></div>
         <button className={`bloom-button ${preview?'previewing':''}`} onClick={()=>setPreview(!preview)}><Lightbulb size={16}/>{preview?'Exit bloom preview':'Preview night bloom'}<span>{preview?'ON':'↗'}</span></button><div className="fine-print">Angle and shade are illustrative, not structurally validated.</div>
+        <div className="heading-row"><span>Roof heading</span><button onClick={()=>setHeadingMode(headingMode==='Auto'?'Manual':'Auto')}>{headingMode}</button><input aria-label="Roof heading" type="range" min="-90" max="90" value={headingMode==='Auto'?heading:manualHeading} disabled={headingMode==='Auto'} onChange={e=>setManualHeading(+e.target.value)}/><b>{heading.toFixed(0)}°</b></div>
       </div>
       <div className="panel fan-controls"><div className="panel-header"><div className="panel-icon fan-icon"><Fan size={18}/></div><div><h3>Cooling system</h3><p>Under-canopy air circulation</p></div><span className={`state-badge header-state ${fansOn?'on':''}`}>{fansOn?'RUNNING':'STANDBY'}</span></div>
         <div className="switch-row"><div><b>Automatic mode</b><div className="helper">Activates above target temperature</div></div><button className={`toggle ${fanMode==='Auto'?'on':''}`} onClick={()=>setFanMode(fanMode==='Auto'?'Manual':'Auto')} aria-label="Toggle automatic fan mode"><i/></button></div>
@@ -100,6 +109,7 @@ export default function App() {
         <div className="threshold-row"><span>Activation temperature</span><b>{threshold}°C</b></div><input className="temp-slider" type="range" min="24" max="38" value={threshold} onChange={e=>setThreshold(+e.target.value)}/><div className="threshold-note">Hysteresis: 1.5°C · helps prevent rapid cycling</div>
         <div className="speed-title">FAN SPEED</div><div className="speed-options">{(['Low','Medium','High'] as FanSpeed[]).map(s=><button onClick={()=>setFanSpeed(s)} className={fanSpeed===s?'chosen':''} key={s}>{s}</button>)}</div>{battery<12&&<div className="warning">Low battery · cooling capped at low speed</div>}
         <div className="fan-power"><span>Current fan consumption</span><b>{fanKw.toFixed(2)} kW</b></div>
+        <div className="occupancy"><span>Seated occupancy</span><input aria-label="Seated occupancy" type="range" min="0" max="8" value={occupancy} onChange={e=>setOccupancy(+e.target.value)}/><b>{occupancy} / 8</b></div>
       </div>
     </section>
     <section className="lower-grid"><div className="panel analytics"><div className="panel-header analytics-head"><div><h3>Energy performance</h3><p>Generation and system demand over simulated time</p></div><span className="chart-legend"><i/> Solar <i className="legend-demand"/> Demand</span></div><div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><AreaChart data={chartData} margin={{top:12,right:12,bottom:0,left:-22}}><defs><linearGradient id="solarFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#d4b554" stopOpacity={.26}/><stop offset="100%" stopColor="#d4b554" stopOpacity={0}/></linearGradient></defs><CartesianGrid stroke="#edf0e9" vertical={false}/><XAxis dataKey="time" tick={{fontSize:10,fill:'#98a39b'}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:10,fill:'#98a39b'}} axisLine={false} tickLine={false}/><Tooltip/><Area type="monotone" dataKey="solar" stroke="#c5a443" strokeWidth={2} fill="url(#solarFill)"/><Line type="monotone" dataKey="demand" stroke="#64a78a" strokeWidth={2} dot={false}/></AreaChart></ResponsiveContainer></div></div>
