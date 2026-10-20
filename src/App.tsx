@@ -22,7 +22,7 @@ export default function App() {
   const lastMinute = useRef(minute), prevNight = useRef(false), prevFan = useRef(false);
   const hour = fmtHour(minute), simulationDay = dayOfYear(simDate), night = daylight(hour, latitude, simulationDay, longitude) < 0.03, activeNight = night || preview;
   const sun = sunGeometry(hour), angle = angleMode === 'Auto' ? automaticAngle(hour, temperature) : manualAngle;
-  const { azimuth: sunAzimuth, elevation: sunElevation } = sunPosition3d(hour, latitude, simulationDay, longitude);
+  const { azimuth: sunAzimuth, elevation: sunElevation, rawElevation: sunAltitude } = sunPosition3d(hour, latitude, simulationDay, longitude);
   const heading = headingMode === 'Auto' ? Math.max(-55, Math.min(55, 180 - sunAzimuth)) : manualHeading;
   const shade = shadeCoverage(hour, angle, heading, latitude, simulationDay, longitude);
   useEffect(() => { if (temperature >= threshold) setAutoCooling(true); else if (temperature <= threshold - 1.5) setAutoCooling(false); }, [temperature, threshold]);
@@ -77,7 +77,7 @@ export default function App() {
           <g><rect x="30" y="26" width="138" height="34" rx="17" fill="#ffffff" opacity=".8"/><circle cx="49" cy="43" r="4" fill="#e8b647"/><text x="61" y="47" fontSize="11" fontWeight="700" fill="#48645c">{solar.toFixed(1)} kW SOLAR</text></g>
           {fansOn&&<g><rect x="704" y="26" width="146" height="34" rx="17" fill="#ffffff" opacity=".82"/><circle cx="723" cy="43" r="4" fill="#59a887"/><text x="735" y="47" fontSize="11" fontWeight="700" fill="#48645c">COOLING ACTIVE</text></g>}
           {activeNight&&<g><rect x="365" y="28" width="170" height="30" rx="15" fill="#243e45" opacity=".8"/><text x="450" y="47" textAnchor="middle" fontSize="10" fontWeight="700" letterSpacing="1.2" fill="#ffd88e">NIGHT BLOOM</text></g>}
-        </svg><CanopyScene heading={heading} tilt={angle} sunAzimuth={sunAzimuth} sunElevation={sunElevation} fansOn={fansOn} night={night || preview} occupancy={occupancy}/>
+        </svg><CanopyScene heading={heading} tilt={angle} sunAzimuth={sunAzimuth} sunElevation={sunElevation} sunAltitude={sunAltitude} fansOn={fansOn} night={night || preview} occupancy={occupancy}/>
         <div className="scene-foot"><span><span className="legend-dot sun-dot"/>SUN POSITION <b>{fmtTime(minute)}</b></span><span><span className="legend-dot shade-dot"/>SHADE COVERAGE <b>{shade}%</b></span><span className="scene-foot-right">SIMULATED · ILLUSTRATIVE MODEL</span></div>
       </div>
       <aside className="side-stack">

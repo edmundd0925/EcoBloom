@@ -1,3 +1,10 @@
+import {
+  CANOPY_ROOF_PIVOT_HEIGHT,
+  CANOPY_ROOF_RADIUS,
+  CANOPY_ROOF_UNDERSIDE_OFFSET,
+  CANOPY_SEAT_RADIUS,
+} from './park/canopyDimensions.ts';
+
 export type Speed = 1 | 2 | 4;
 export type HistoryPoint = { time: string; solar: number; demand: number; battery: number; temp: number; angle: number; fan: number };
 
@@ -24,9 +31,10 @@ export const sunPosition3d = (hour: number, latitude = 3.139, day = 292, longitu
   const x = -Math.cos(declination) * Math.sin(hourAngle);
   const y = Math.sin(latitudeRad) * Math.sin(declination) + Math.cos(latitudeRad) * Math.cos(declination) * Math.cos(hourAngle);
   const z = Math.cos(latitudeRad) * Math.sin(declination) - Math.sin(latitudeRad) * Math.cos(declination) * Math.cos(hourAngle);
-  const elevation = Math.max(0, degrees(Math.asin(y)));
+  const rawElevation = degrees(Math.asin(y));
+  const elevation = Math.max(0, rawElevation);
   const azimuth = (degrees(Math.atan2(x, z)) + 360) % 360;
-  return { azimuth, elevation, vector: { x, y: Math.max(0, y), z } };
+  return { azimuth, elevation, rawElevation, vector: { x, y: Math.max(0, y), z } };
 };
 
 export const daylight = (hour: number, latitude = 3.139, day = 292, longitude = 101.686) => {
@@ -44,23 +52,47 @@ export const roofOrientationFactor = (hour: number, tilt: number, heading: numbe
   const normal = { x: Math.sin(h) * Math.sin(t), y: Math.cos(t), z: Math.cos(h) * Math.sin(t) };
   return clamp(.82 + .18 * Math.max(0, normal.x * sun.x + normal.y * sun.y + normal.z * sun.z), .55, 1);
 };
-const circleOverlapArea = (firstRadius: number, secondRadius: number, distance: number) => {
-  if (distance >= firstRadius + secondRadius) return 0;
-  if (distance <= Math.abs(firstRadius - secondRadius)) return Math.PI * Math.min(firstRadius, secondRadius) ** 2;
-  const first = Math.acos(clamp((distance ** 2 + firstRadius ** 2 - secondRadius ** 2) / (2 * distance * firstRadius), -1, 1));
-  const second = Math.acos(clamp((distance ** 2 + secondRadius ** 2 - firstRadius ** 2) / (2 * distance * secondRadius), -1, 1));
-  const chord = .5 * Math.sqrt((-distance + firstRadius + secondRadius) * (distance + firstRadius - secondRadius) * (distance - firstRadius + secondRadius) * (distance + firstRadius + secondRadius));
-  return firstRadius ** 2 * first + secondRadius ** 2 * second - chord;
-};
 export const shadeCoverage = (hour: number, angle: number, heading = 0, latitude = 3.139, day = 292, longitude = 101.686) => {
-  const sun = sunPosition3d(hour, latitude, day, longitude).vector;
+  const position = sunPosition3d(hour, latitude, day, longitude);
+  const sun = position.vector;
   if (sun.y <= 0) return 0;
-  const horizontalLength = Math.hypot(sun.x, sun.z);
-  const shadowOffset = 1.5 * horizontalLength / Math.max(.08, sun.y);
-  const tiltFactor = .92 + .08 * Math.cos(radians(angle));
-  const headingFactor = .96 + .04 * Math.abs(Math.cos(radians(heading)));
-  const shadowRadius = 2 * tiltFactor * headingFactor;
-  const seatRadius = 1.25;
-  return Math.round(clamp(circleOverlapArea(shadowRadius, seatRadius, shadowOffset) / (Math.PI * seatRadius ** 2) * 100, 0, 100));
+
+  const tilt = radians(angle), yaw = radians(heading);
+  const roofNormal = {
+    x: Math.sin(yaw) * Math.sin(tilt),
+    y: Math.cos(tilt),
+    z: Math.cos(yaw) * Math.sin(tilt),
+  };
+  const roofCenter = {
+    x: Math.sin(yaw) * Math.sin(tilt) * CANOPY_ROOF_UNDERSIDE_OFFSET,
+    y: CANOPY_ROOF_PIVOT_HEIGHT + Math.cos(tilt) * CANOPY_ROOF_UNDERSIDE_OFFSET,
+    z: Math.cos(yaw) * Math.sin(tilt) * CANOPY_ROOF_UNDERSIDE_OFFSET,
+  };
+  const dot = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) => a.x * b.x + a.y * b.y + a.z * b.z;
+  const roofRayDenominator = dot(sun, roofNormal);
+  const isRoofShaded = (point: { x: number; y: number; z: number }) => {
+    if (roofRayDenominator <= 0) return false;
+    const distance = dot({ x: roofCenter.x - point.x, y: roofCenter.y - point.y, z: roofCenter.z - point.z }, roofNormal) / roofRayDenominator;
+    if (distance <= 0) return false;
+    const hit = { x: point.x + sun.x * distance, y: point.y + sun.y * distance, z: point.z + sun.z * distance };
+    const dx = hit.x - roofCenter.x, dy = hit.y - roofCenter.y, dz = hit.z - roofCenter.z;
+    return dx * dx + dy * dy + dz * dz <= CANOPY_ROOF_RADIUS * CANOPY_ROOF_RADIUS;
+  };
+  // Sample each seated person at body/head height and across the torso footprint.
+  let shaded = 0, total = 0;
+  for (let person = 0; person < 8; person++) {
+    const a = (person / 8) * Math.PI * 2;
+    const centerX = Math.sin(a) * CANOPY_SEAT_RADIUS;
+    const centerZ = Math.cos(a) * CANOPY_SEAT_RADIUS;
+    const offsets = [[0, 0], [.11, 0], [-.11, 0], [0, .11], [0, -.11]] as const;
+    for (const y of [.55, .8, 1.05]) {
+      for (const [offsetX, offsetZ] of offsets) {
+        const point = { x: centerX + offsetX, y, z: centerZ + offsetZ };
+        if (isRoofShaded(point)) shaded++;
+        total++;
+      }
+    }
+  }
+  return Math.round((shaded / total) * 100);
 };
 export const solarOutput = (hour: number, sunlight: number, tilt: number, heading = 0, latitude = 3.139, day = 292, longitude = 101.686) => clamp(18 * daylight(hour, latitude, day, longitude) * sunlight / 100 * roofOrientationFactor(hour, tilt, heading, latitude, day, longitude), 0, 18);
