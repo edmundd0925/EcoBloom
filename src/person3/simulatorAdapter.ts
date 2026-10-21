@@ -6,12 +6,12 @@
  */
 import {
   automaticAngle,
-  dayOfYear,
   daylight,
+  MYT_UTC_OFFSET_HOURS,
   shadeCoverage,
   solarOutput,
   sunPosition3d,
-} from '../simulation';
+} from '../simulation.ts';
 
 export type OperatingMode = 'AUTO' | 'MANUAL' | 'OFF';
 export type FanMode = 'AUTO' | 'ON' | 'OFF';
@@ -43,6 +43,7 @@ export interface DashboardOutputs {
   sunAzimuth: number;
   sunElevation: number;
   sunAltitude: number;
+  sunDirection: { x: number; y: number; z: number };
   fansOn: boolean;
   lightsOn: boolean;
   night: boolean;
@@ -65,7 +66,7 @@ export const formatTime = (minute: number) =>
   `${String(Math.floor(minute / 60) % 24).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
 
 export const defaultInputs = (): DashboardInputs => ({
-  date: new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10),
+  date: new Date(Date.now() + MYT_UTC_OFFSET_HOURS * 3_600_000).toISOString().slice(0, 10),
   minute: 14 * 60,
   latitude: 3.139,
   longitude: 101.686,
@@ -87,9 +88,8 @@ export const DEMO_BATTERY_CAPACITY_KWH = 48;
 /** All values are illustrative until validated by Persons 2 and 4. */
 export function calculateDemoOutput(input: DashboardInputs): DashboardOutputs {
   const hour = input.minute / 60;
-  const day = dayOfYear(input.date);
-  const sun = sunPosition3d(hour, input.latitude, day, input.longitude);
-  const night = daylight(hour, input.latitude, day, input.longitude) < 0.03;
+  const sun = sunPosition3d(input.date, input.minute, input.latitude, input.longitude);
+  const night = daylight(input.date, input.minute, input.latitude, input.longitude) < 0.03;
   const windAlert = input.windSpeed >= DEMO_WIND_LIMIT_MS;
   const energySaving = input.battery <= 8;
 
@@ -121,10 +121,10 @@ export function calculateDemoOutput(input: DashboardInputs): DashboardOutputs {
     reason = `Roof follows the simulated sun position (${sun.azimuth.toFixed(0)}° azimuth, ${sun.elevation.toFixed(0)}° elevation) to improve seating shade.`;
   }
 
-  const shade = night ? 0 : shadeCoverage(hour, tilt, heading, input.latitude, day, input.longitude);
+  const shade = night ? 0 : shadeCoverage(input.date, input.minute, tilt, heading, input.latitude, input.longitude);
   const solarKw = input.mode === 'OFF' || windAlert
-    ? solarOutput(hour, input.sunlight, 0, 0, input.latitude, day, input.longitude)
-    : solarOutput(hour, input.sunlight, tilt, heading, input.latitude, day, input.longitude);
+    ? solarOutput(input.date, input.minute, input.sunlight, 0, 0, input.latitude, input.longitude)
+    : solarOutput(input.date, input.minute, input.sunlight, tilt, heading, input.latitude, input.longitude);
   const fansOn = !windAlert && input.mode !== 'OFF' && input.occupancy > 0 && input.battery > 7 &&
     (input.fanMode === 'ON' || (input.fanMode === 'AUTO' && input.temperature >= 30));
   const lightsOn = !windAlert && input.mode !== 'OFF' && night && input.occupancy > 0 && input.battery > 5;
@@ -134,7 +134,7 @@ export function calculateDemoOutput(input: DashboardInputs): DashboardOutputs {
 
   return {
     heading, tilt, shade, solarKw, demandKw, battery: input.battery,
-    sunAzimuth: sun.azimuth, sunElevation: sun.elevation, sunAltitude: sun.rawElevation,
+    sunAzimuth: sun.azimuth, sunElevation: sun.elevation, sunAltitude: sun.rawElevation, sunDirection: sun.vector,
     fansOn, lightsOn, night, windAlert, energyState, operatingState, reason,
   };
 }

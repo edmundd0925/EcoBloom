@@ -2,12 +2,13 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { createEcoCanopyModel } from './createEcoCanopyModel';
+import { dampCanopyPose } from './canopyPose';
 import { CANOPY_SEAT_RADIUS } from './canopyDimensions';
 import './scene.css';
 
-export type SceneProps={heading:number;tilt:number;sunAzimuth:number;sunElevation:number;sunAltitude?:number;fansOn:boolean;night:boolean;occupancy:number;onAngles?:(yaw:number,tilt:number)=>void};
-export function CanopyScene({heading,tilt,sunAzimuth,sunElevation,sunAltitude,fansOn,night,occupancy,onAngles}:SceneProps){
- const host=useRef<HTMLDivElement>(null); const live=useRef({heading,tilt,sunAzimuth,sunElevation,sunAltitude,fansOn,night,occupancy,onAngles}); live.current={heading,tilt,sunAzimuth,sunElevation,sunAltitude,fansOn,night,occupancy,onAngles};
+export type SceneProps={heading:number;tilt:number;sunDirection:{x:number;y:number;z:number};fansOn:boolean;night:boolean;occupancy:number;onAngles?:(yaw:number,tilt:number)=>void};
+export function CanopyScene({heading,tilt,sunDirection,fansOn,night,occupancy,onAngles}:SceneProps){
+ const host=useRef<HTMLDivElement>(null); const live=useRef({heading,tilt,sunDirection,fansOn,night,occupancy,onAngles}); live.current={heading,tilt,sunDirection,fansOn,night,occupancy,onAngles};
  useEffect(()=>{ const el=host.current!; const scene=new THREE.Scene(); const sky=new THREE.Color(0xb9dcea); const nightSky=new THREE.Color(0x07152c); scene.background=sky; scene.fog=new THREE.Fog(0xb9dcea,18,42); const camera=new THREE.PerspectiveCamera(42,1,.1,100); camera.position.set(7,2.9,8); const renderer=new THREE.WebGLRenderer({antialias:true}); renderer.setPixelRatio(Math.min(devicePixelRatio,1.6)); renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap; el.appendChild(renderer.domElement);
   const controls=new OrbitControls(camera,renderer.domElement); controls.target.set(0,1.3,0); controls.enableDamping=true; controls.minDistance=4.5; controls.maxDistance=15; controls.maxPolarAngle=Math.PI*.48;
   scene.add(new THREE.HemisphereLight(0xd8f0ff,0x365c35,1.45));
@@ -25,7 +26,7 @@ export function CanopyScene({heading,tilt,sunAzimuth,sunElevation,sunAltitude,fa
   scene.add(key.target,key);
   const ground=new THREE.Mesh(new THREE.PlaneGeometry(42,42),new THREE.MeshStandardMaterial({color:0x659d65,roughness:1})); ground.rotation.x=-Math.PI/2; ground.receiveShadow=true; scene.add(ground);
   const path=new THREE.Mesh(new THREE.RingGeometry(1.7,3.6,64),new THREE.MeshStandardMaterial({color:0xd6cfba,roughness:.88})); path.rotation.x=-Math.PI/2; path.position.y=.006; path.receiveShadow=true; scene.add(path);
-  const canopy=createEcoCanopyModel(); scene.add(canopy.root);
+  const canopy = createEcoCanopyModel(); scene.add(canopy.root);
   const people=new THREE.Group(); scene.add(people); const peopleMat=[0x8c5740,0x3c6675,0xa27951,0x5b6b4b].map(color=>new THREE.MeshStandardMaterial({color,roughness:.7}));
   for(let i=0;i<8;i++){
     const p=new THREE.Group();
@@ -41,21 +42,20 @@ export function CanopyScene({heading,tilt,sunAzimuth,sunElevation,sunAltitude,fa
   const animate=()=>{
     raf=requestAnimationFrame(animate);
     const s=live.current;
-    const az=s.sunAzimuth*Math.PI/180;
-    const altitude=s.sunAltitude ?? s.sunElevation;
-    const elv=altitude*Math.PI/180;
-    const sunDirection=new THREE.Vector3(Math.sin(az)*Math.cos(elv),Math.sin(elv),Math.cos(az)*Math.cos(elv));
-    key.position.copy(sunDirection).multiplyScalar(12).add(key.target.position);
+    const direction=new THREE.Vector3(s.sunDirection.x,s.sunDirection.y,s.sunDirection.z);
+    key.position.copy(direction).multiplyScalar(12).add(key.target.position);
     key.intensity=s.night?.18:2.8;
-    key.castShadow=!s.night;
+    // A small daylight threshold controls the night presentation, not whether
+    // direct sunlight exists. Keep visible shadows enabled until the sun is
+    // actually at or below the horizon, matching the numeric shade status.
+    key.castShadow=direction.y>0;
 
     scene.background=s.night?nightSky:sky;
     scene.fog!.color.copy(s.night?nightSky:sky);
     canopy.led.material.emissiveIntensity=s.night?2.6:0;
-    currentYaw=THREE.MathUtils.damp(currentYaw,s.heading*Math.PI/180,4,.016);
-    currentTilt=THREE.MathUtils.damp(currentTilt,s.tilt*Math.PI/180,4,.016);
-    canopy.roofYaw.rotation.y=currentYaw;
-    canopy.roofTilt.rotation.x=currentTilt;
+    const currentPose=dampCanopyPose(canopy,{yaw:currentYaw,tilt:currentTilt},{heading:s.heading,tilt:s.tilt},.016);
+    currentYaw=currentPose.yaw;
+    currentTilt=currentPose.tilt;
     canopy.fan.rotation.y+=s.fansOn?.32:0;
     people.children.forEach((p,i)=>p.visible=i<s.occupancy);
     s.onAngles?.(THREE.MathUtils.radToDeg(currentYaw),THREE.MathUtils.radToDeg(currentTilt));

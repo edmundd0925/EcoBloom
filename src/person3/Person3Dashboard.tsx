@@ -178,8 +178,7 @@ export default function Person3Dashboard() {
           <span className="p3-online">● Scene connected</span></div>
         <div className="p3-scene scene-card">
           <CanopyScene heading={output.heading} tilt={output.tilt}
-            sunAzimuth={output.sunAzimuth} sunElevation={output.sunElevation}
-            sunAltitude={output.sunAltitude}
+            sunDirection={output.sunDirection}
             fansOn={output.fansOn} night={output.night}
             occupancy={inputs.occupancy} />
         </div>
@@ -199,7 +198,7 @@ export default function Person3Dashboard() {
           </div>
         </Section>
         <Section title="Environment" subtitle="Adjust the conditions in real time" icon={Sun}>
-          <RangeField label="Time of day" valueLabel={formatTime(inputs.minute)} min={0} max={1439}
+          <RangeField label="Time of day (MYT)" valueLabel={formatTime(inputs.minute)} min={0} max={1439}
             step={5} value={inputs.minute} onChange={v => patch('minute', v)} />
           <RangeField label="Temperature" valueLabel={`${inputs.temperature} °C`} min={20} max={42}
             value={inputs.temperature} onChange={v => patch('temperature', v)} />
