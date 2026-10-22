@@ -1,23 +1,16 @@
-# EcoBloom full updated project — Person 3 dashboard
+# EcoBloom — Solar Park Simulator
 
-This archive retains ALL files from your original EcoBloom-main ZIP, including `node_modules/`, `dist/`, `.img2threejs/`, `.taste-skill/`, `vendor/`, and the entire original source.
+This project contains the EcoBloom Smart Solar Park application with procedural Three.js 3D canopy visualization, solar trajectory modeling, adaptive ground shade optimization, environmental controls, cooling system, and a unified compact dashboard.
 
-Person 3 files added:
-- `src/person3/Person3Dashboard.tsx`
-- `src/person3/simulatorAdapter.ts`
-- `src/person3/person3.css`
-- `src/person3/route-nav.css`
-
-Existing file changed: `src/main.tsx` (adds an original-park / dashboard switch).
-No changes to `src/App.tsx`, `src/park/` or `src/simulation.ts`.
-
-## Windows / VS Code
-1. Extract this ZIP. Open the INNER `EcoBloom-main` folder containing `package.json` in VS Code (File > Open Folder).
-2. EASIEST: double-click `START-ECOBLOOM-WINDOWS.cmd` in the extracted folder. It deletes only the extracted, incompatible Mac `node_modules` copy, installs Windows packages, and starts the site.
-   MANUAL option in VS Code terminal: `Remove-Item -Recurse -Force .\node_modules`, then `npm.cmd install`, then `npm.cmd run dev`.
-3. If using manual setup, keep the Vite terminal running while using the site.
-4. Visit `http://localhost:5173/` and choose **Smart dashboard**, or visit `http://localhost:5173/?dashboard=person3`. Use Vite's displayed port if different.
-5. Run `npm.cmd run build` to regenerate `dist/` for publishing. The bundled `dist/` contains the ORIGINAL PRE-UPDATE website and has NOT been rebuilt; do not deploy it as the new dashboard.
+## Running the Project (Mac, Windows & Linux)
+1. Open this folder in VS Code or Terminal (File > Open Folder).
+2. Start the project:
+   - **Universal / Recommended**: Run `npm start` in Terminal (or `node start.mjs`). This automatically checks dependencies and starts Vite.
+   - Or run `npm install` followed by `npm run dev`.
+   - On macOS/Linux, you can also run `./start.sh`.
+3. Keep the terminal running while using the site.
+4. Visit `http://localhost:5173/`. Use Vite's displayed port if different.
+5. Run `npm run build` to regenerate `dist/` for publishing.
 
 ## Notes
 - The dashboard's wind threshold, battery, power and shade figures are simulated, not measured.

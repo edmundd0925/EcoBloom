@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "start": "node start.mjs",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "node --experimental-strip-types --test tests/groundShadeCoverage.test.mjs tests/solarPosition.test.mjs tests/shadeOptimization.test.mjs",

@@ -14,6 +14,7 @@ export type CanopyModel = {
   opaqueRoofMeshes: THREE.Mesh[];
   fan: THREE.Group;
   led: THREE.Mesh<THREE.TorusGeometry, THREE.MeshStandardMaterial>;
+  fanIndicator?: THREE.Mesh<THREE.CylinderGeometry, THREE.MeshStandardMaterial>;
 };
 
 /** Increment when the opaque shell geometry used for area shade changes. */
@@ -142,7 +143,6 @@ export function createEcoCanopyModel(): CanopyModel {
   const bearing = mesh(new THREE.CylinderGeometry(.36,.36,.14,32),metal(0x3d4547,.22)); bearing.name = 'fixed-roof-bearing'; bearing.position.y=2.28; root.add(bearing);
   const roofYaw=new THREE.Group(); roofYaw.name='roof-yaw-pivot'; roofYaw.position.y=CANOPY_ROOF_PIVOT_HEIGHT; root.add(roofYaw);
   const roofTilt=new THREE.Group(); roofTilt.name='roof-tilt-pivot'; roofYaw.add(roofTilt);
-  const actuator=mesh(new THREE.CylinderGeometry(.055,.055,.62,12),metal(0x787f7d,.32)); actuator.name='illustrative-roof-actuator'; actuator.position.set(.72,-.22,0); actuator.rotation.z=-.62; roofTilt.add(actuator);
   const opaqueRoof = createOpaqueRoofSurfaces();
   roofTilt.add(opaqueRoof.group);
   // Two raised photovoltaic modules sit symmetrically on opposite sides of the dome.
@@ -246,46 +246,82 @@ export function createEcoCanopyModel(): CanopyModel {
   const led=mesh(new THREE.TorusGeometry(1.54,.028,10,64),warm); led.rotation.x=Math.PI/2; led.position.y=-.1; roofTilt.add(led);
   const fan = new THREE.Group();
   fan.name = 'cooling-fan';
-  // Keep the illustrative fan inside the central roof opening and above the fixed bearing.
-  fan.position.set(0, 0.55, 0);
+  // Positioned prominently within the central opening above the bearing clearance.
+  fan.position.set(0, 0.36, 0);
   roofTilt.add(fan);
 
-  // A light housing and separated radial blades make the rotor legible below the roof.
+  // Aerodynamic rotor housing in satin metallic alloy
   const fanHousing = mesh(
-    new THREE.CylinderGeometry(0.4, 0.4, 0.12, 40),
-    metal(0xd8e0e4, 0.46)
+    new THREE.CylinderGeometry(0.35, 0.38, 0.08, 36),
+    metal(0xc8d5db, 0.36)
   );
   fanHousing.name = 'cooling-fan-housing';
+  fanHousing.position.y = 0.06;
   fan.add(fanHousing);
 
-  // Contrasting dark green centre hub
+  // Contrasting emerald hub housing the rotor mechanism
   const fanHub = mesh(
-    new THREE.CylinderGeometry(0.14, 0.14, 0.17, 24),
-    metal(0x15966a, 0.48)
+    new THREE.CylinderGeometry(0.16, 0.16, 0.10, 24),
+    metal(0x187a5a, 0.42)
   );
   fanHub.name = 'cooling-fan-hub';
-  fanHub.position.y = -0.01;
+  fanHub.position.y = 0.0;
   fan.add(fanHub);
 
-  // Five swept paddle blades extend from the hub without overlapping.
+  // Active cooling indicator beacon on the bottom center of the hub
+  const fanIndicator = mesh(
+    new THREE.CylinderGeometry(0.09, 0.09, 0.02, 24),
+    new THREE.MeshStandardMaterial({
+      color: 0x34d399,
+      emissive: 0x34d399,
+      emissiveIntensity: 0,
+      roughness: 0.25,
+      metalness: 0.1,
+    })
+  );
+  fanIndicator.name = 'cooling-fan-indicator';
+  fanIndicator.position.y = -0.05;
+  fan.add(fanIndicator);
+
+  // Five prominent high-contrast swept aerodynamic blades with dual-tone accent
   const bladeMaterial = new THREE.MeshStandardMaterial({
-    color: 0x45545c,
-    metalness: 0.62,
-    roughness: 0.48,
+    color: 0x9de2d4,
+    metalness: 0.25,
+    roughness: 0.35,
     side: THREE.DoubleSide,
   });
+  const tipMaterial = new THREE.MeshStandardMaterial({
+    color: 0x187a5a,
+    metalness: 0.35,
+    roughness: 0.4,
+    side: THREE.DoubleSide,
+  });
+
   for (let i = 0; i < 5; i++) {
     const shape = new THREE.Shape();
-    shape.moveTo(-0.09, 0.13);
-    shape.quadraticCurveTo(-0.12, 0.32, 0.03, 0.49);
-    shape.quadraticCurveTo(0.17, 0.65, 0.14, 0.82);
-    shape.quadraticCurveTo(0.02, 0.80, -0.11, 0.68);
-    shape.quadraticCurveTo(-0.25, 0.51, -0.17, 0.30);
-    shape.quadraticCurveTo(-0.14, 0.20, -0.09, 0.13);
-    const blade = mesh(new THREE.ShapeGeometry(shape, 12), bladeMaterial);
-    blade.position.y = -0.08;
+    shape.moveTo(-0.09, 0.15);
+    shape.quadraticCurveTo(-0.13, 0.34, 0.03, 0.52);
+    shape.quadraticCurveTo(0.18, 0.68, 0.15, 0.86);
+    shape.quadraticCurveTo(0.02, 0.84, -0.12, 0.72);
+    shape.quadraticCurveTo(-0.26, 0.53, -0.18, 0.32);
+    shape.quadraticCurveTo(-0.14, 0.22, -0.09, 0.15);
+    const blade = mesh(new THREE.ShapeGeometry(shape, 14), bladeMaterial);
+    blade.name = `cooling-fan-blade-${i + 1}`;
+    blade.position.y = 0.0;
     blade.rotation.set(Math.PI / 2, (i * Math.PI * 2) / 5, 0);
     fan.add(blade);
+
+    // Tip accent on outer 20% of blade for crisp visual rotation
+    const tipShape = new THREE.Shape();
+    tipShape.moveTo(0.06, 0.72);
+    tipShape.quadraticCurveTo(0.18, 0.68, 0.15, 0.86);
+    tipShape.quadraticCurveTo(0.02, 0.84, -0.12, 0.72);
+    tipShape.closePath();
+    const tip = mesh(new THREE.ShapeGeometry(tipShape, 10), tipMaterial);
+    tip.name = `cooling-fan-tip-${i + 1}`;
+    tip.position.y = 0.001;
+    tip.rotation.set(Math.PI / 2, (i * Math.PI * 2) / 5, 0);
+    fan.add(tip);
   }
-  return { root, roofYaw, roofTilt, opaqueRoofMeshes: opaqueRoof.meshes, fan, led };
+  return { root, roofYaw, roofTilt, opaqueRoofMeshes: opaqueRoof.meshes, fan, led, fanIndicator };
 }

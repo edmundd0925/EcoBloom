@@ -7,18 +7,21 @@ import {
   SHADE_OPTIMIZATION_LIMITS,
 } from '../src/park/shadeOptimization.ts';
 import { CANOPY_TILT_LIMITS } from '../src/park/canopyDimensions.ts';
-import { groundShadeCoverageCacheKey } from '../src/simulation.ts';
+import { groundShadeCoverageCacheKey, sunPosition3d } from '../src/simulation.ts';
 import {
   ADAPTIVE_SHADE_MINIMUM_IMPROVEMENT_PERCENT,
   ADAPTIVE_SHADE_TRIGGER_ANGLE_DEGREES,
   adaptiveShadeInputKey,
   adaptiveTargetForSun,
+  calculateAdaptiveTargetPose,
   createAdaptiveShadeSearchCache,
+  initialShadePoseEstimate,
   isAdaptiveShadeSearchCurrent,
   manualTimeChangeSearchAction,
   scheduleAdaptiveShadeSearch,
   shouldSearchAdaptiveShade,
   transitionAdaptiveControlMode,
+  vectorAngleDegrees,
 } from '../src/park/adaptiveShade.ts';
 
 test('optimization selects the highest-coverage candidate that was evaluated', () => {
@@ -199,4 +202,84 @@ test('the cache reuses exact candidate scores across sweeps and evicts least-rec
   assert.equal(cache.get('afternoon'), undefined);
   assert.deepEqual(cache.get('evening'), []);
   assert.throws(() => createAdaptiveShadeSearchCache(0), RangeError);
+});
+
+test('fast initial shade pose estimate responds within provisional limits and parks at night', () => {
+  // Nighttime (sun below horizon)
+  const nightEstimate = initialShadePoseEstimate(false, { x: 0, y: -0.5, z: 0 }, -30);
+  assert.deepEqual(nightEstimate, { heading: 0, tilt: 0 });
+
+  // Morning sun in East (+X)
+  const morningSun = { x: 0.8, y: 0.5, z: 0.2 };
+  const morningEstimate = initialShadePoseEstimate(true, morningSun, 30);
+  assert.ok(morningEstimate.heading >= -90 && morningEstimate.heading <= 90);
+  assert.ok(morningEstimate.tilt >= -30 && morningEstimate.tilt <= 30);
+  // Negative tilt points roof normal towards East
+  assert.ok(morningEstimate.tilt < 0, `Expected morning tilt < 0, got ${morningEstimate.tilt}`);
+
+  // Afternoon sun in West (-X)
+  const afternoonSun = { x: -0.8, y: 0.5, z: 0.2 };
+  const afternoonEstimate = initialShadePoseEstimate(true, afternoonSun, 30);
+  assert.ok(afternoonEstimate.heading >= -90 && afternoonEstimate.heading <= 90);
+  assert.ok(afternoonEstimate.tilt >= -30 && afternoonEstimate.tilt <= 30);
+  // Positive tilt points roof normal towards West
+  assert.ok(afternoonEstimate.tilt > 0, `Expected afternoon tilt > 0, got ${afternoonEstimate.tilt}`);
+});
+
+test('adaptive search rejects stale worker results when sun drift exceeds trigger angle', () => {
+  const key = adaptiveShadeInputKey('2026-10-21', 570, 3.139, 101.686);
+  const changedTime = adaptiveShadeInputKey('2026-10-21', 610, 3.139, 101.686);
+  const searchSun = { x: 0.78, y: 0.58, z: -0.21 };
+  // Small drift (< 3 degrees)
+  const smallDriftSun = { x: 0.77, y: 0.59, z: -0.21 };
+  // Large drift (>= 3 degrees, e.g. 10 degrees)
+  const largeDriftSun = { x: 0.65, y: 0.72, z: -0.21 };
+  assert.equal(isAdaptiveShadeSearchCurrent(1, 1, key, changedTime, true, {
+    allowClockDrift: true,
+    sameContext: true,
+    directSunAvailable: true,
+    searchSun,
+    currentSun: smallDriftSun,
+    maxDriftDegrees: 3,
+  }), true);
+  assert.equal(isAdaptiveShadeSearchCurrent(1, 1, key, changedTime, true, {
+    allowClockDrift: true,
+    sameContext: true,
+    directSunAvailable: true,
+    searchSun,
+    currentSun: largeDriftSun,
+    maxDriftDegrees: 3,
+  }), false);
+});
+
+test('calculateAdaptiveTargetPose combines fast initial estimate with refinement offset and clamps to provisional limits', () => {
+  const fast = { heading: -90, tilt: -25 };
+  // Zero refinement
+  assert.deepEqual(calculateAdaptiveTargetPose(fast, { heading: 0, tilt: 0 }, true), fast);
+  // Null refinement
+  assert.deepEqual(calculateAdaptiveTargetPose(fast, null, true), fast);
+  // Applied refinement
+  assert.deepEqual(calculateAdaptiveTargetPose(fast, { heading: 15, tilt: -3 }, true), { heading: -75, tilt: -28 });
+  // Clamping to provisional limits: tilt [-30, 30], heading [-90, 90]
+  assert.deepEqual(calculateAdaptiveTargetPose(fast, { heading: -20, tilt: -10 }, true), { heading: -90, tilt: -30 });
+  assert.deepEqual(calculateAdaptiveTargetPose({ heading: 85, tilt: 28 }, { heading: 20, tilt: 10 }, true), { heading: 90, tilt: 30 });
+  // Nighttime / sun below horizon returns neutral
+  assert.deepEqual(calculateAdaptiveTargetPose(fast, { heading: 15, tilt: -5 }, false), { heading: 0, tilt: 0 });
+});
+
+test('playback simulation advances canopy target continuously with changing sun position', () => {
+  // Across successive minutes during playback, canopy angle updates continuously
+  const poses = [];
+  for (let m = 564; m <= 580; m += 2) {
+    const pos = sunPosition3d('2026-10-21', m, 3.139, 101.686);
+    const fast = initialShadePoseEstimate(pos.rawElevation > 0, pos.vector, pos.elevation);
+    const target = calculateAdaptiveTargetPose(fast, { heading: 5, tilt: -2 }, pos.rawElevation > 0);
+    poses.push({ minute: m, target });
+  }
+  // Verify each step produces a changing target (canopy is never frozen during playback)
+  for (let i = 1; i < poses.length; i++) {
+    const prev = poses[i - 1].target;
+    const curr = poses[i].target;
+    assert.notDeepEqual(prev, curr, `Canopy pose at minute ${poses[i].minute} should differ from minute ${poses[i - 1].minute}`);
+  }
 });

@@ -9,7 +9,6 @@ import {
   sunGeometry,
   sunPosition3d,
 } from '../src/simulation.ts';
-import { calculateDemoOutput, defaultInputs } from '../src/person3/simulatorAdapter.ts';
 import { CANOPY_TILT_LIMITS } from '../src/park/canopyDimensions.ts';
 
 const closeTo = (actual, expected, tolerance, label) => {
@@ -102,16 +101,4 @@ test('daylight normalization peaks at solar transit rather than MYT clock noon',
   const solarTransit = daylight('2026-03-20', 13 * 60 + 21, 3.139, 101.686);
   assert.ok(clockNoon < 0.99, `MYT noon should precede local solar transit (${clockNoon})`);
   assert.ok(solarTransit > 0.99, `solar-transit daylight should peak (${solarTransit})`);
-});
-
-test('Person 3 adapter forwards the shared MYT sun vector and updates with date and location', () => {
-  const inputs = { ...defaultInputs(), date: '2026-03-20', minute: 9 * 60, mode: 'MANUAL', manualHeading: 0, manualTilt: 0 };
-  const output = calculateDemoOutput(inputs);
-  const expected = sunPosition3d(inputs.date, inputs.minute, inputs.latitude, inputs.longitude);
-  assert.deepEqual(output.sunDirection, expected.vector);
-  assert.equal(output.sunAzimuth, expected.azimuth);
-  const nextDate = calculateDemoOutput({ ...inputs, date: '2026-06-21' });
-  const nextLongitude = calculateDemoOutput({ ...inputs, longitude: 120 });
-  assert.notEqual(nextDate.sunElevation, output.sunElevation);
-  assert.notEqual(nextLongitude.sunAzimuth, output.sunAzimuth);
 });

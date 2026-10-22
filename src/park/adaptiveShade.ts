@@ -19,17 +19,29 @@ export function adaptiveShadeInputKey(date: string, minute: number, latitude: nu
   return JSON.stringify([date, minute, latitude, longitude]);
 }
 
-/** Rejects results from a cancelled run or from an older environmental snapshot. */
+/** Rejects results from a cancelled run, older environmental snapshot, or excessive sun drift. */
 export function isAdaptiveShadeSearchCurrent(
   runId: number,
   activeRunId: number,
   searchInputKey: string,
   currentInputKey: string,
   adaptiveEnabled: boolean,
-  options: { allowClockDrift?: boolean; sameContext?: boolean; directSunAvailable?: boolean } = {},
+  options: {
+    allowClockDrift?: boolean;
+    sameContext?: boolean;
+    directSunAvailable?: boolean;
+    searchSun?: SunDirection;
+    currentSun?: SunDirection;
+    maxDriftDegrees?: number;
+  } = {},
 ) {
   if (!adaptiveEnabled || runId !== activeRunId || options.directSunAvailable === false) return false;
-  return searchInputKey === currentInputKey || Boolean(options.allowClockDrift && options.sameContext);
+  if (searchInputKey === currentInputKey) return true;
+  if (!options.allowClockDrift || !options.sameContext) return false;
+  if (options.searchSun && options.currentSun && options.maxDriftDegrees !== undefined) {
+    return vectorAngleDegrees(options.searchSun, options.currentSun) < options.maxDriftDegrees;
+  }
+  return true;
 }
 
 /** Small LRU cache for exact shade scores of individual roof-pose candidates. */
@@ -53,7 +65,7 @@ export function createAdaptiveShadeSearchCache<T>(maxEntries = 3) {
   };
 }
 
-const vectorAngleDegrees = (first: SunDirection, second: SunDirection) => {
+export const vectorAngleDegrees = (first: SunDirection, second: SunDirection) => {
   const firstLength = Math.hypot(first.x, first.y, first.z);
   const secondLength = Math.hypot(second.x, second.y, second.z);
   if (firstLength === 0 || secondLength === 0) return 180;
@@ -97,6 +109,60 @@ export function adaptiveTargetForSun(
   return adaptiveEnabled && !directSunAvailable
     ? { heading: 0, tilt: 0 }
     : currentTarget;
+}
+
+/**
+ * Fast, reasonable initial estimate for canopy pose that responds immediately to sun
+ * position to cast ground shade over the occupied area, prior to exact optimizer refinement.
+ * Preserves the ground-shade coverage objective and respects provisional movement limits
+ * (heading in [-90, 90], tilt in [-30, 30]).
+ */
+export function initialShadePoseEstimate(
+  directSunAvailable: boolean,
+  sunVector: SunDirection,
+  elevationDegrees: number,
+): RoofPosition {
+  if (!directSunAvailable || elevationDegrees <= 0) {
+    return { heading: 0, tilt: 0 };
+  }
+  const { x, z } = sunVector;
+  const el = Math.max(0, elevationDegrees);
+  const maxTilt = 30;
+  // Tilt magnitude scales with sun angle from overhead (90° -> 0° tilt, lower sun -> steeper tilt up to 30°)
+  const tiltMag = Math.min(maxTilt, Math.max(0, (90 - el) * (maxTilt / 60)));
+
+  // When sun is in East (x >= 0), negative tilt shifts the roof to cast shade over the center.
+  // When sun is in West (x < 0), positive tilt shifts the roof to cast shade over the center.
+  let h = -90;
+  const t = x >= 0 ? -tiltMag : tiltMag;
+  if (Math.abs(z) > 0.04) {
+    h = Math.max(-90, Math.min(90, -90 + (x >= 0 ? z * 20 : -z * 20)));
+  }
+
+  return {
+    heading: Math.max(-90, Math.min(90, Math.round(h * 10) / 10)),
+    tilt: Math.max(-30, Math.min(30, Math.round(t * 10) / 10)),
+  };
+}
+
+/**
+ * Computes the target canopy pose from the continuous initial estimate and the
+ * optimizer's refinement offset, constrained by provisional geometry limits.
+ */
+export function calculateAdaptiveTargetPose(
+  fastPose: RoofPosition,
+  refinement: { heading: number; tilt: number } | null,
+  directSunAvailable: boolean,
+): RoofPosition {
+  if (!directSunAvailable) {
+    return { heading: 0, tilt: 0 };
+  }
+  const hOffset = refinement?.heading ?? 0;
+  const tOffset = refinement?.tilt ?? 0;
+  return {
+    heading: Math.max(-90, Math.min(90, Math.round((fastPose.heading + hOffset) * 10) / 10)),
+    tilt: Math.max(-30, Math.min(30, Math.round((fastPose.tilt + tOffset) * 10) / 10)),
+  };
 }
 
 /** Preserve the current target when switching modes so the roof does not jump. */
