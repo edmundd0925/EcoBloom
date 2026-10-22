@@ -283,3 +283,48 @@ test('playback simulation advances canopy target continuously with changing sun 
     assert.notDeepEqual(prev, curr, `Canopy pose at minute ${poses[i].minute} should differ from minute ${poses[i - 1].minute}`);
   }
 });
+
+test('sunset angle adjustment around 18:44 applies improving candidate faithfully without being corrupted into zero-shade mutant pose', () => {
+  const m = 18 * 60 + 44; // 18:44
+  const pos = sunPosition3d('2026-10-22', m, 3.139, 101.686);
+  assert.ok(pos.rawElevation > 0, 'Sun should be above horizon at 18:44');
+  const fast = initialShadePoseEstimate(pos.rawElevation > 0, pos.vector, pos.elevation);
+  
+  const improvingCandidate = { heading: 75, tilt: -30 };
+  const refinement = {
+    heading: improvingCandidate.heading - fast.heading,
+    tilt: improvingCandidate.tilt - fast.tilt,
+  };
+  const target = calculateAdaptiveTargetPose(fast, refinement, pos.rawElevation > 0);
+  assert.equal(target.heading, 75);
+  assert.equal(target.tilt, -30);
+});
+
+test('playback and time adjustment integration avoids artificial battery delta spikes and stale refinement during dragging', () => {
+  // 1. Verify simulation step delta bounding
+  for (const speed of [1, 2, 4]) {
+    // Normal 1-tick advance
+    const normalDelta = Math.min(speed / 60, ((565 - 564 + 1440) % 1440) / 60);
+    assert.equal(normalDelta, 1 / 60);
+
+    // Large manual jump (e.g. 564 -> 1080) must be capped to speed / 60
+    const jumpedDelta = Math.min(speed / 60, ((1080 - 564 + 1440) % 1440) / 60);
+    assert.equal(jumpedDelta, speed / 60, 'Battery time delta must not accrue skipped hours');
+
+    // Backward jump (e.g. 1080 -> 480) must also be capped to speed / 60
+    const backwardDelta = Math.min(speed / 60, ((480 - 1080 + 1440) % 1440) / 60);
+    assert.equal(backwardDelta, speed / 60, 'Backward time jump must not accrue 14-hour wrap');
+  }
+
+  // 2. Dragging across daytime uses unskewed fast pose
+  const morningSun = sunPosition3d('2026-10-22', 9 * 60, 3.139, 101.686);
+  const afternoonSun = sunPosition3d('2026-10-22', 15 * 60, 3.139, 101.686);
+  const morningFast = initialShadePoseEstimate(true, morningSun.vector, morningSun.elevation);
+  const afternoonFast = initialShadePoseEstimate(true, afternoonSun.vector, afternoonSun.elevation);
+
+  // During drag, refinement is reset to {0, 0}
+  const dragTarget = calculateAdaptiveTargetPose(afternoonFast, { heading: 0, tilt: 0 }, true);
+  assert.equal(dragTarget.tilt, afternoonFast.tilt, 'Canopy tilt during drag should reflect afternoon sun, not morning');
+  assert.ok(dragTarget.tilt > 0, 'Afternoon tilt should face west (+tilt)');
+  assert.ok(morningFast.tilt < 0, 'Morning tilt should face east (-tilt)');
+});

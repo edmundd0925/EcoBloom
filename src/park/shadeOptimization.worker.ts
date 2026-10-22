@@ -1,9 +1,10 @@
-import { groundAreaShadeCoverage, type SunPosition } from '../simulation.ts';
+import { personUpperBodyShadeCoverage, type SunPosition } from '../simulation.ts';
 import type { RoofPosition } from './shadeOptimization.ts';
 
 type SearchRequest = {
   sun: SunPosition;
   positions: RoofPosition[];
+  occupancy?: number;
 };
 
 type SearchResponse =
@@ -16,15 +17,15 @@ const scope = globalThis as unknown as {
   postMessage: (message: SearchResponse) => void;
 };
 
-// Reuse simulation.ts's worker-local shade rig and the cached ground sample
-// grid for the entire search. A 21-candidate report interval keeps the UI's
-// progress state useful without producing a render for every small batch.
+// Evaluates upper-body person shade coverage for candidate canopy poses.
+// A 21-candidate report interval keeps the UI's progress state responsive.
 scope.onmessage = async ({ data }) => {
   try {
     const evaluated: Array<RoofPosition & { coveragePercent: number }> = [];
+    const occupancy = data.occupancy && data.occupancy > 0 ? data.occupancy : 8;
     for (let index = 0; index < data.positions.length; index++) {
       const position = data.positions[index];
-      const shade = groundAreaShadeCoverage(data.sun, position.tilt, position.heading);
+      const shade = personUpperBodyShadeCoverage(data.sun, position.tilt, position.heading, occupancy);
       evaluated.push({ ...position, coveragePercent: shade.coveragePercent });
 
       if ((index + 1) % 21 === 0 && index + 1 < data.positions.length) {

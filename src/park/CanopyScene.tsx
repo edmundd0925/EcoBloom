@@ -284,16 +284,20 @@ export function CanopyScene({heading,tilt,sunDirection,fansOn,night,occupancy,on
     }
   );
 
-  let raf=0, currentYaw=0,currentTilt=0; const resize=()=>{const w=el.clientWidth,h=el.clientHeight;camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h,false)}; const observer=new ResizeObserver(resize);observer.observe(el);resize();
+  let raf = 0;
+  let currentYaw = THREE.MathUtils.degToRad(live.current.heading);
+  let currentTilt = THREE.MathUtils.degToRad(live.current.tilt);
+  canopy.roofYaw.rotation.y = currentYaw;
+  canopy.roofTilt.rotation.x = currentTilt;
+  const resize=()=>{const w=el.clientWidth,h=el.clientHeight;camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h,false)}; const observer=new ResizeObserver(resize);observer.observe(el);resize();
   const animate=()=>{
     raf=requestAnimationFrame(animate);
     const s=live.current;
     const direction=new THREE.Vector3(s.sunDirection.x,s.sunDirection.y,s.sunDirection.z);
     key.position.copy(direction).multiplyScalar(12).add(key.target.position);
     key.intensity=s.night?.18:2.8;
-    // A small daylight threshold controls the night presentation, not whether
-    // direct sunlight exists. Keep visible shadows enabled until the sun is
-    // actually at or below the horizon, matching the numeric shade status.
+    // Keep visible shadows enabled when sun is above the horizon (direction.y > 0),
+    // matching the unified 0° day/night boundary and direct sun availability.
     key.castShadow=direction.y>0;
 
     scene.background=s.night?nightSky:sky;

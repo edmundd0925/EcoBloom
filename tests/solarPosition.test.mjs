@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   daylight,
+  isDay,
+  isNight,
   MYT_STANDARD_MERIDIAN,
   mytToUtc,
   automaticAngle,
@@ -101,4 +103,51 @@ test('daylight normalization peaks at solar transit rather than MYT clock noon',
   const solarTransit = daylight('2026-03-20', 13 * 60 + 21, 3.139, 101.686);
   assert.ok(clockNoon < 0.99, `MYT noon should precede local solar transit (${clockNoon})`);
   assert.ok(solarTransit > 0.99, `solar-transit daylight should peak (${solarTransit})`);
+});
+
+test('day/night transition uses consistent 0° threshold in both directions', () => {
+  // Key elevation values specified in requirements: -0.2°, 0°, +0.2°, +1.5°
+  assert.equal(isDay(-0.2), false, '-0.2° must evaluate to Night');
+  assert.equal(isNight(-0.2), true, '-0.2° must evaluate to Night');
+
+  assert.equal(isDay(0), false, '0° boundary must evaluate to Night');
+  assert.equal(isNight(0), true, '0° boundary must evaluate to Night');
+
+  assert.equal(isDay(0.2), true, '+0.2° must evaluate to Day');
+  assert.equal(isNight(0.2), false, '+0.2° must evaluate to Day');
+
+  assert.equal(isDay(1.5), true, '+1.5° must evaluate to Day');
+  assert.equal(isNight(1.5), false, '+1.5° must evaluate to Day');
+
+  // Transition from negative elevation to positive elevation (rising sun / morning)
+  // Day begins when sun elevation crosses above 0°
+  const risingElevations = [-0.2, 0, 0.2, 1.5];
+  const risingStates = risingElevations.map(isDay);
+  assert.deepEqual(risingStates, [false, false, true, true],
+    'Rising: -0.2° and 0° are Night; +0.2° and +1.5° are Day');
+
+  // Transition from positive elevation to negative elevation (setting sun / evening)
+  // Night begins when sun elevation crosses below 0° (or reaches 0° boundary)
+  const settingElevations = [1.5, 0.2, 0, -0.2];
+  const settingStates = settingElevations.map(isDay);
+  assert.deepEqual(settingStates, [true, true, false, false],
+    'Setting: +1.5° and +0.2° are Day; 0° and -0.2° are Night');
+
+  // Verify consistent 0° threshold in both directions without hysteresis
+  const testAngles = [-5, -1.5, -0.2, -0.01, 0, 0.01, 0.2, 1.5, 5];
+  for (const angle of testAngles) {
+    const day = isDay(angle);
+    const night = isNight(angle);
+    assert.equal(day, !night, `isDay and isNight must be strictly complementary at ${angle}°`);
+    assert.equal(day, angle > 0, `isDay must be true if and only if angle > 0 at ${angle}°`);
+    assert.equal(night, angle <= 0, `isNight must be true if and only if angle <= 0 at ${angle}°`);
+  }
+
+  // Verify SunPosition object support matching sunPosition3d output
+  assert.equal(isDay({ rawElevation: 0.2 }), true);
+  assert.equal(isDay({ rawElevation: 0 }), false);
+  assert.equal(isDay({ rawElevation: -0.2 }), false);
+  assert.equal(isNight({ rawElevation: 0.2 }), false);
+  assert.equal(isNight({ rawElevation: 0 }), true);
+  assert.equal(isNight({ rawElevation: -0.2 }), true);
 });

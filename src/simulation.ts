@@ -11,7 +11,10 @@ import {
   SHADE_SAMPLE_SPACING,
 } from './park/canopyDimensions.ts';
 import { calculateGroundAreaShade, type GroundShadeResult } from './park/groundShadeCoverage.ts';
+import { calculatePersonUpperBodyShade, type PersonUpperBodyShadeResult } from './park/personUpperBodyShade.ts';
 import { createOpaqueRoofSurfaces, OPAQUE_ROOF_SHADE_GEOMETRY_VERSION } from './park/createEcoCanopyModel.ts';
+
+export type { PersonUpperBodyShadeResult };
 
 export type Speed = 1 | 2 | 4;
 export type HistoryPoint = { time: string; solar: number; demand: number; battery: number; temp: number; angle: number; fan: number };
@@ -147,6 +150,21 @@ export const daylight = (date: string, minute: number, latitude = 3.139, longitu
   const elevation = sun.elevation;
   return clamp(Math.sin(radians(elevation)) / Math.max(.1, Math.sin(radians(noonElevation))), 0, 1);
 };
+
+/**
+ * Day begins when actual sun elevation crosses above 0°.
+ * Night begins when actual sun elevation crosses below or equals 0°.
+ * A consistent 0° threshold is used in both directions.
+ */
+export const isDay = (elevationOrSun: number | { rawElevation: number }) => {
+  const elev = typeof elevationOrSun === 'number' ? elevationOrSun : elevationOrSun.rawElevation;
+  return elev > 0;
+};
+
+export const isNight = (elevationOrSun: number | { rawElevation: number }) => {
+  const elev = typeof elevationOrSun === 'number' ? elevationOrSun : elevationOrSun.rawElevation;
+  return elev <= 0;
+};
 export const sunGeometry = (sun: SunPosition) => ({
   x: 450 - sun.vector.x * 350,
   y: 205 - Math.max(0, sun.vector.y) * 142,
@@ -189,6 +207,69 @@ export const groundAreaShadeCoverage = (
     centerX: OCCUPIED_AREA_CENTER_X,
     centerZ: OCCUPIED_AREA_CENTER_Z,
   });
+};
+
+export type PersonShadeCacheInputs = {
+  date: string;
+  minute: number;
+  latitude: number;
+  longitude: number;
+  angle: number;
+  heading: number;
+  occupancy: number;
+};
+
+export const personUpperBodyShadeCoverageCacheKey = ({
+  date,
+  minute,
+  latitude,
+  longitude,
+  angle,
+  heading,
+  occupancy,
+}: PersonShadeCacheInputs) => JSON.stringify({
+  inputs: [date, minute, latitude, longitude, angle, heading, occupancy],
+  model: {
+    solarPositionVersion: 1,
+    personUpperBodyShadeVersion: 1,
+    mytUtcOffsetHours: MYT_UTC_OFFSET_HOURS,
+    mytStandardMeridian: MYT_STANDARD_MERIDIAN,
+    canopySeatRadius: CANOPY_SEAT_RADIUS,
+    roofGeometry: [CANOPY_ROOF_RADIUS, CANOPY_ROOF_PIVOT_HEIGHT, CANOPY_ROOF_UNDERSIDE_OFFSET],
+    opaqueRoofGeometryVersion: OPAQUE_ROOF_SHADE_GEOMETRY_VERSION,
+  },
+});
+
+export function createPersonShadeResultCache() {
+  let cachedKey: string | undefined;
+  let cachedResult: PersonUpperBodyShadeResult | undefined;
+  return {
+    getOrCalculate(key: string, calculate: () => PersonUpperBodyShadeResult): PersonUpperBodyShadeResult {
+      if (key === cachedKey && cachedResult) return cachedResult;
+      cachedResult = calculate();
+      cachedKey = key;
+      return cachedResult;
+    },
+    clear() {
+      cachedKey = undefined;
+      cachedResult = undefined;
+    },
+  };
+}
+
+export const personUpperBodyShadeCoverage = (
+  sun: SunPosition,
+  angle: number,
+  heading = 0,
+  occupancy = 8,
+): PersonUpperBodyShadeResult => {
+  shadeYaw.rotation.y = radians(heading);
+  shadeTilt.rotation.x = radians(angle);
+  shadeYaw.updateMatrixWorld(true);
+  const direction = sun.rawElevation > 0
+    ? new THREE.Vector3(sun.vector.x, sun.vector.y, sun.vector.z)
+    : new THREE.Vector3();
+  return calculatePersonUpperBodyShade(shadeRoof.meshes, direction, occupancy);
 };
 
 /**

@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, BatteryCharging, ChevronDown, CircleHelp, Clock3, Compass, Fan, Leaf, Lightbulb, Pause, Play, RotateCcw, Settings2, Sun, Users, Zap } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { automaticAngle, daylight, createGroundShadeResultCache, groundAreaShadeCoverage, groundShadeCoverageCacheKey, MYT_UTC_OFFSET_HOURS, shadeCoverage, solarOutput, sunGeometry, sunPosition3d, type HistoryPoint, type Speed } from './simulation';
+import { automaticAngle, daylight, isDay, isNight, createPersonShadeResultCache, personUpperBodyShadeCoverage, personUpperBodyShadeCoverageCacheKey, MYT_UTC_OFFSET_HOURS, solarOutput, sunGeometry, sunPosition3d, type HistoryPoint, type PersonUpperBodyShadeResult, type Speed } from './simulation';
 import { CanopyScene } from './park/CanopyScene';
 import { CANOPY_TILT_LIMITS } from './park/canopyDimensions';
-import type { GroundShadeResult } from './park/groundShadeCoverage';
 import { ADAPTIVE_SHADE_MINIMUM_IMPROVEMENT_PERCENT, ADAPTIVE_SHADE_TRIGGER_ANGLE_DEGREES, adaptiveShadeInputKey, adaptiveTargetForSun, calculateAdaptiveTargetPose, createAdaptiveShadeSearchCache, initialShadePoseEstimate, isAdaptiveShadeSearchCurrent, manualTimeChangeSearchAction, scheduleAdaptiveShadeSearch, shouldSearchAdaptiveShade, transitionAdaptiveControlMode } from './park/adaptiveShade';
 import { chooseBestShadeCandidate, chooseImprovingShadeCandidate, createShadeOptimizationPositions } from './park/shadeOptimization';
 import type { RoofPosition } from './park/shadeOptimization';
@@ -35,7 +34,7 @@ export default function App() {
   const [simDate, setSimDate] = useState(initialMytDate), [latitude, setLatitude] = useState(3.139), [longitude, setLongitude] = useState(101.686);
   const [history, setHistory] = useState<HistoryPoint[]>([]), [events, setEvents] = useState(['Adaptive shading aligned with the morning sun', 'System online · all sensors connected']);
   const lastMinute = useRef(minute), prevNight = useRef(false), prevFan = useRef(false);
-  const [shadeSnapshot, setShadeSnapshot] = useState<{ key: string; result: GroundShadeResult } | null>(null);
+  const [shadeSnapshot, setShadeSnapshot] = useState<{ key: string; result: PersonUpperBodyShadeResult } | null>(null);
   const [shadeSliderActive, setShadeSliderActive] = useState(false);
   const [adaptivePose, setAdaptivePose] = useState<{ heading: number; tilt: number } | null>(null);
   const [adaptiveRefinement, setAdaptiveRefinement] = useState<{ heading: number; tilt: number }>({ heading: 0, tilt: 0 });
@@ -56,24 +55,29 @@ export default function App() {
   const adaptiveSearchCache = adaptiveSearchCacheRef.current!;
   const lastAdaptiveSearchSunRef = useRef<{ x: number; y: number; z: number } | null>(null);
   const shadeSliderActiveRef = useRef(false);
-  const shadeCacheRef = useRef<ReturnType<typeof createGroundShadeResultCache> | null>(null);
-  if (!shadeCacheRef.current) shadeCacheRef.current = createGroundShadeResultCache();
+  const shadeCacheRef = useRef<ReturnType<typeof createPersonShadeResultCache> | null>(null);
+  if (!shadeCacheRef.current) shadeCacheRef.current = createPersonShadeResultCache();
   const beginShadeSliderInteraction = () => {
     if (shadeSliderActiveRef.current) return;
     shadeSliderActiveRef.current = true;
     setShadeSliderActive(true);
   };
   const endShadeSliderInteraction = () => {
-    if (!shadeSliderActiveRef.current) return;
+    const wasTimeInteraction = timeSliderInteractionRef.current;
+    const wasPending = manualTimeSearchPendingRef.current;
+    const wasActive = shadeSliderActiveRef.current;
+    if (!wasTimeInteraction && !wasPending && !wasActive) return;
+
     shadeSliderActiveRef.current = false;
-    setShadeSliderActive(false);
-    if (!timeSliderInteractionRef.current) return;
     timeSliderInteractionRef.current = false;
-    if (!manualTimeSearchPendingRef.current) return;
     manualTimeSearchPendingRef.current = false;
-    lastAdaptiveSearchSunRef.current = null;
-    setAdaptiveRefinement({ heading: 0, tilt: 0 });
-    setAdaptiveSearchRevision(revision => revision + 1);
+    setShadeSliderActive(false);
+
+    if (wasTimeInteraction || wasPending) {
+      lastAdaptiveSearchSunRef.current = null;
+      setAdaptiveRefinement({ heading: 0, tilt: 0 });
+      setAdaptiveSearchRevision(revision => revision + 1);
+    }
   };
   const cancelAdaptiveSearch = () => {
     if (!adaptiveSearchWorkerRef.current && !adaptiveSearchRunningRef.current) return;
@@ -97,11 +101,11 @@ export default function App() {
     timeSliderInteractionRef.current = true;
     beginShadeSliderInteraction();
   };
-  const shadeSliderProps = { onPointerDown: beginShadeSliderInteraction, onKeyDown: handleShadeSliderKeyDown };
-  const timeSliderProps = { onPointerDown: beginTimeSliderInteraction, onKeyDown: handleTimeSliderKeyDown };
+  const shadeSliderProps = { onPointerDown: beginShadeSliderInteraction, onPointerUp: endShadeSliderInteraction, onPointerCancel: endShadeSliderInteraction, onKeyDown: handleShadeSliderKeyDown, onKeyUp: endShadeSliderInteraction };
+  const timeSliderProps = { onPointerDown: beginTimeSliderInteraction, onPointerUp: endShadeSliderInteraction, onPointerCancel: endShadeSliderInteraction, onKeyDown: handleTimeSliderKeyDown, onKeyUp: endShadeSliderInteraction };
   const hour = fmtHour(minute);
   const sunPosition = useMemo(() => sunPosition3d(simDate, minute, latitude, longitude), [simDate, minute, latitude, longitude]);
-  const night = useMemo(() => daylight(simDate, minute, latitude, longitude) < 0.03, [simDate, minute, latitude, longitude]), activeNight = night || preview;
+  const night = useMemo(() => isNight(sunPosition.rawElevation), [sunPosition.rawElevation]), activeNight = night || preview;
   const sun = sunGeometry(sunPosition);
   const adaptiveEnabled = angleMode === 'Auto' && headingMode === 'Auto';
   const fastPose = useMemo(
@@ -129,19 +133,25 @@ export default function App() {
   const adaptiveInputKeyRef = useRef(adaptiveInputKey);
   const currentTargetRef = useRef({ heading, tilt: angle });
   currentTargetRef.current = { heading, tilt: angle };
-  const shadeKey = groundShadeCoverageCacheKey({ date: simDate, minute, latitude, longitude, angle, heading });
+  const shadeKey = personUpperBodyShadeCoverageCacheKey({ date: simDate, minute, latitude, longitude, angle, heading, occupancy });
   const shade = shadeSnapshot?.result ?? null;
   const shadeUpdating = shadeSliderActive || !shadeSnapshot || shadeSnapshot.key !== shadeKey;
-  const shadeLabel = shade ? (shade.directSunAvailable ? `${shade.coveragePercent}%` : 'No direct sun') : 'Calculating…';
+  const shadeLabel = shade
+    ? (sunPosition.rawElevation <= 0
+        ? 'No direct sun'
+        : occupancy === 0
+          ? 'No seated visitors'
+          : `${shade.coveragePercent}%`)
+    : 'Calculating…';
   useEffect(() => {
     if (shadeSliderActive) return;
     const timeout = window.setTimeout(() => {
       if (shadeSliderActiveRef.current) return;
-      const result = shadeCacheRef.current!.getOrCalculate(shadeKey, () => groundAreaShadeCoverage(sunPosition, angle, heading));
+      const result = shadeCacheRef.current!.getOrCalculate(shadeKey, () => personUpperBodyShadeCoverage(sunPosition, angle, heading, occupancy));
       setShadeSnapshot(current => current?.key === shadeKey ? current : { key: shadeKey, result });
     }, 140);
     return () => window.clearTimeout(timeout);
-  }, [shadeKey, shadeSliderActive, sunPosition, angle, heading]);
+  }, [shadeKey, shadeSliderActive, sunPosition, angle, heading, occupancy]);
   useEffect(() => {
     if (playing && adaptiveSearchWorkerRef.current && activeSearchContextRef.current === adaptiveContextKey) {
       activeSearchAllowsClockDriftRef.current = true;
@@ -216,13 +226,14 @@ export default function App() {
     const startingPosition = { ...currentTargetRef.current };
     setAdaptivePose(current => current ?? startingPosition);
     const positions = createShadeOptimizationPositions(startingPosition);
-    const candidateCacheKey = (position: RoofPosition) => groundShadeCoverageCacheKey({
+    const candidateCacheKey = (position: RoofPosition) => personUpperBodyShadeCoverageCacheKey({
       date: simDate,
       minute,
       latitude,
       longitude,
       angle: position.tilt,
       heading: position.heading,
+      occupancy,
     });
     const cachedEvaluations: EvaluatedShadeCandidate[] = [];
     const positionsToEvaluate: RoofPosition[] = [];
@@ -252,8 +263,8 @@ export default function App() {
       );
       if (improvingCandidate) {
         setAdaptiveRefinement({
-          heading: Math.max(-45, Math.min(45, improvingCandidate.heading - searchFastPose.heading)),
-          tilt: Math.max(-20, Math.min(20, improvingCandidate.tilt - searchFastPose.tilt)),
+          heading: improvingCandidate.heading - searchFastPose.heading,
+          tilt: improvingCandidate.tilt - searchFastPose.tilt,
         });
         setAdaptivePose({ heading: improvingCandidate.heading, tilt: improvingCandidate.tilt });
         setAdaptiveShadeState({
@@ -367,8 +378,8 @@ export default function App() {
       }
       finishWorker();
     };
-    worker.postMessage({ sun: searchSun, positions: positionsToEvaluate });
-  }, [adaptiveEnabled, sunPosition, night, adaptiveInputKey, adaptiveSearchRevision]);
+    worker.postMessage({ sun: searchSun, positions: positionsToEvaluate, occupancy });
+  }, [adaptiveEnabled, sunPosition, night, adaptiveInputKey, adaptiveSearchRevision, occupancy]);
   useEffect(() => {
     if (!shadeSliderActive) return;
     const finishInteraction = () => endShadeSliderInteraction();
@@ -383,7 +394,6 @@ export default function App() {
       window.removeEventListener('blur', finishInteraction);
     };
   }, [shadeSliderActive]);
-  const personShade = useMemo(() => shadeCoverage(simDate, minute, angle, heading, latitude, longitude, occupancy), [simDate, minute, angle, heading, latitude, longitude, occupancy]);
   useEffect(() => { if (temperature >= threshold) setAutoCooling(true); else if (temperature <= threshold - 1.5) setAutoCooling(false); }, [temperature, threshold]);
   const fansOn = fanMode === 'Auto' ? autoCooling && battery > 7 : manualFan && battery > 2;
   const effectiveSpeed = battery < 12 && fanSpeed === 'High' ? 'Low' : fanSpeed;
@@ -392,18 +402,31 @@ export default function App() {
   const energyState = solar > demand + .1 ? 'Charging' : solar + .1 < demand ? 'Discharging' : 'Balanced';
   const runtime = demand > 0 && battery / 100 * 48 > 2.4 ? Math.floor(((battery / 100 * 48 - 2.4) * 60) / demand) : 0;
   const pushEvent = (msg: string) => setEvents(e => [msg, ...e].slice(0, 20));
-  useEffect(() => { if (!playing) return; const id = window.setInterval(() => setMinute(m => (m + speed) % 1440), 900); return () => clearInterval(id); }, [playing, speed]);
+  useEffect(() => {
+    if (!playing) return;
+    const id = window.setInterval(() => {
+      if (timeSliderInteractionRef.current || shadeSliderActiveRef.current) return;
+      setMinute(m => (m + speed) % 1440);
+    }, 900);
+    return () => clearInterval(id);
+  }, [playing, speed]);
   useEffect(() => {
     if (minute !== lastMinute.current) {
-      const delta = ((minute - lastMinute.current + 1440) % 1440) / 60; lastMinute.current = minute;
+      const rawDelta = ((minute - lastMinute.current + 1440) % 1440) / 60;
+      const delta = Math.min(speed / 60, rawDelta);
+      lastMinute.current = minute;
       const net = solar - demand;
       setBattery(b => Math.max(0, Math.min(100, b + net * delta / 48 * 100 * (net >= 0 ? .92 : 1.08))));
       setHistory(h => [...h.slice(-31), { time: fmtTime(minute), solar: +solar.toFixed(1), demand: +demand.toFixed(1), battery: +battery.toFixed(1), temp: temperature, angle: +angle.toFixed(1), fan: fansOn ? 1 : 0 }]);
     }
-  }, [minute, solar, demand]);
+  }, [minute, solar, demand, speed]);
   useEffect(() => { if (night !== prevNight.current) { pushEvent(night ? 'Night bloom activated · decorative lights on' : 'Day mode restored · panels tracking sunlight'); prevNight.current = night; } }, [night]);
   useEffect(() => { if (fansOn !== prevFan.current) { pushEvent(fansOn ? `Cooling fans activated · ${effectiveSpeed.toLowerCase()} speed` : 'Cooling fans stopped · below activation threshold'); prevFan.current = fansOn; } }, [fansOn, effectiveSpeed]);
   const reset = () => { cancelAdaptiveSearch(); lastAdaptiveSearchSunRef.current=null; setAdaptiveSearchQueued(false); setAdaptiveSearchRevision(revision=>revision+1); setAdaptivePose(null); setAdaptiveRefinement({ heading: 0, tilt: 0 }); setAdaptiveShadeState({status:'idle'}); setMinute(9*60+24); setPlaying(false); setSpeed(1); setSunlight(78); setTemperature(29); setBattery(batteryStart); setAngleMode('Auto'); setManualAngle(0); setHeadingMode('Auto'); setManualHeading(0); setOccupancy(5); setFanMode('Auto'); setManualFan(false); setAutoCooling(false); setThreshold(30); setFanSpeed('Medium'); setPreview(false); setHistory([]); pushEvent('Scenario reset to morning defaults'); };
+  const togglePlay = () => {
+    endShadeSliderInteraction();
+    setPlaying(p => !p);
+  };
   const chartData = useMemo(() => history.length ? history : [{ time: fmtTime(minute), solar: +solar.toFixed(1), demand: +demand.toFixed(1), battery: battery, temp: temperature, angle, fan: fansOn ? 1 : 0 }], [history, minute, solar, demand, battery, temperature, angle, fansOn]);
   const setClock = (value: number) => {
     if (value === minute) return;
@@ -418,6 +441,11 @@ export default function App() {
       lastAdaptiveSearchSunRef.current = null;
       setAdaptiveRefinement({ heading: 0, tilt: 0 });
       setAdaptiveSearchRevision(revision => revision + 1);
+    } else {
+      // While dragging across times, reset refinement so the canopy tracks
+      // the sun's instantaneous position smoothly rather than carrying an
+      // outdated offset from a different time of day.
+      setAdaptiveRefinement({ heading: 0, tilt: 0 });
     }
   };
   const toggleAdaptiveShading = () => {
@@ -495,7 +523,7 @@ export default function App() {
           <button
             className={`dock-btn ${playing ? 'active' : ''}`}
             title={playing ? 'Pause Simulation' : 'Play Simulation'}
-            onClick={() => setPlaying(!playing)}
+            onClick={togglePlay}
             aria-label={playing ? 'Pause' : 'Play'}
           >
             {playing ? <Pause size={15} /> : <Play size={15} />}
@@ -537,7 +565,7 @@ export default function App() {
             <div className="playback-capsule">
               <button
                 className={`play-toggle-btn ${playing ? 'playing' : ''}`}
-                onClick={() => setPlaying(!playing)}
+                onClick={togglePlay}
                 aria-label={playing ? 'Pause simulation' : 'Play simulation'}
               >
                 {playing ? <Pause size={12} /> : <Play size={12} />}
@@ -579,7 +607,7 @@ export default function App() {
                   <b>{sunPosition.rawElevation.toFixed(1)}°</b>
                 </div>
                 <div className="overlay-chip">
-                  <span>Ground Shade:</span>
+                  <span>Upper-Body Shade:</span>
                   <b>{shadeLabel}</b>
                   {shadeUpdating && <small> (calc…)</small>}
                 </div>
@@ -848,7 +876,7 @@ export default function App() {
                 <div className="switch-row">
                   <div className="switch-label-group">
                     <b>Adaptive Sun Shading</b>
-                    <span className="field-subtext">Ground-shade optimization</span>
+                    <span className="field-subtext">Upper-body shade optimization</span>
                   </div>
                   <button
                     className={`toggle-switch ${adaptiveEnabled ? 'on' : ''}`}
@@ -915,17 +943,17 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Ground Shade Coverage & Actions */}
+              {/* Upper-Body Person Shade Coverage & Actions */}
               <div className="block-subcard" style={{ gap: '3px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '7.5px' }}>
-                  <span style={{ color: 'var(--text-secondary)' }}>Occupied Ground Shade{shadeUpdating && <small> · Updating…</small>}</span>
-                  <b style={{ color: 'var(--ice-accent)' }}>{shade ? (shade.directSunAvailable ? `${shade.coveragePercent}%` : 'Direct sun unavailable') : 'Calculating…'}</b>
+                  <span style={{ color: 'var(--text-secondary)' }}>Upper-Body Person Shade Coverage{shadeUpdating && <small> · Updating…</small>}</span>
+                  <b style={{ color: 'var(--ice-accent)' }}>{shade ? (sunPosition.rawElevation <= 0 ? 'Direct sun unavailable' : occupancy === 0 ? 'No seated visitors' : `${shade.coveragePercent}%`) : 'Calculating…'}</b>
                 </div>
                 <div className="progress-bar-wrap">
                   <div className="progress-bar-fill fill-ice" style={{ width: `${shade?.coveragePercent ?? 0}%` }} />
                 </div>
                 <div style={{ fontSize: '6.8px', color: 'var(--text-muted)' }} role="status" aria-live="polite">
-                  {sunPosition.rawElevation <= 0 ? 'Night: direct sun unavailable' : occupancy === 0 ? 'No seated visitors' : `Person-level estimate: ${personShade}% (${occupancy} seated)`}
+                  {sunPosition.rawElevation <= 0 ? 'Night: direct sun unavailable' : occupancy === 0 ? 'No seated visitors' : `Upper-body coverage: ${shade ? `${shade.coveragePercent}%` : 'Calculating…'} (${occupancy} seated)`}
                 </div>
                 <div className="block-action-row" style={{ marginTop: '2px', justifyContent: 'space-between' }}>
                   <button className={`btn-bloom ${preview ? 'active' : ''}`} onClick={() => setPreview(!preview)}>
@@ -956,10 +984,10 @@ export default function App() {
                   <div className="opt-detail-text error">Error: {adaptiveShadeState.message}</div>
                 )}
                 {adaptiveEnabled && adaptiveShadeState.status === 'applied' && (
-                  <div className="opt-detail-text success">Refined target: H {adaptiveShadeState.heading.toFixed(0)}°, T {adaptiveShadeState.tilt.toFixed(0)}° ({adaptiveShadeState.coveragePercent.toFixed(1)}% shade, +{adaptiveShadeState.improvementPercent.toFixed(1)}%).</div>
+                  <div className="opt-detail-text success">Refined target: H {adaptiveShadeState.heading.toFixed(0)}°, T {adaptiveShadeState.tilt.toFixed(0)}° ({adaptiveShadeState.coveragePercent.toFixed(1)}% upper-body shade, +{adaptiveShadeState.improvementPercent.toFixed(1)}%).</div>
                 )}
                 {adaptiveEnabled && adaptiveShadeState.status === 'held' && (
-                  <div className="opt-detail-text">Holding H {adaptiveShadeState.heading.toFixed(0)}°, T {adaptiveShadeState.tilt.toFixed(0)}° ({adaptiveShadeState.coveragePercent.toFixed(1)}% shade). Gain &lt; 1%.</div>
+                  <div className="opt-detail-text">Holding H {adaptiveShadeState.heading.toFixed(0)}°, T {adaptiveShadeState.tilt.toFixed(0)}° ({adaptiveShadeState.coveragePercent.toFixed(1)}% upper-body shade). Gain &lt; 1%.</div>
                 )}
                 {!adaptiveEnabled && (
                   <div className="opt-detail-text">Manual override active; automated search paused.</div>
