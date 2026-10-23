@@ -55,9 +55,20 @@ npm run build
 
 The generated files will be placed in the `dist/` directory.
 
+### Limitations
+
+EcoBloom is a software simulation and prototype. Its dashboard values and system behavior are illustrative rather than validated real-world measurements.
+
+1. Solar generation, battery levels, and wind conditions are simulated.
+
+2. Shade measurements and canopy movement are estimates produced by the simulation.
+
+3. The wind threshold and canopy safety responses have not been validated for real-world use.
+
+4. The simulator is not connected to physical sensors or hardware and should not be used as a real-world safety system.
+5. 
 ## Development Notes
 
 - The live website is deployed on Vercel.
 - Changes made to your local source files will not automatically update the live website unless the deployment process is triggered.
 - This project does not automatically push changes to GitHub or publish updates to Vercel.
-- Keep the team source files organized and coordinate code changes with your team leader.
